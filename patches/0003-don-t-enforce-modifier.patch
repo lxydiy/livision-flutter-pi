@@ -1,0 +1,25 @@
+From 6697a3e91f03417f219e4e45057213cfcb0bbd96 Mon Sep 17 00:00:00 2001
+From: lxydiy <1452206376@qq.com>
+Date: Sat, 8 Aug 2026 18:33:00 +0800
+Subject: [PATCH] don't enforce modifier
+
+---
+ src/modesetting.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/modesetting.c b/src/modesetting.c
+index 8ad4a24..f0d28a7 100644
+--- a/src/modesetting.c
++++ b/src/modesetting.c
+@@ -2090,7 +2090,7 @@ static bool plane_qualifies(
+         ASSERT(false);
+     }
+ 
+-    if (has_modifier) {
++    if (has_modifier && modifier != 0) {
+         if (!plane->supported_modified_formats_blob) {
+             // return false if we want a modified format but the plane doesn't support modified formats
+             LOG_DRM_PLANE_ALLOCATION_DEBUG(
+-- 
+2.25.1
+
