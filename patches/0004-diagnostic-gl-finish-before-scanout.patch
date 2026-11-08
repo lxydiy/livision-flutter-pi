@@ -1,0 +1,83 @@
+Subject: [PATCH] Add opt-in GL completion wait for scanout diagnosis
+
+diff --git a/src/gl_renderer.h b/src/gl_renderer.h
+--- a/src/gl_renderer.h
++++ b/src/gl_renderer.h
+@@ -55,6 +55,9 @@
+ 
+ int gl_renderer_make_flutter_setup_context_current(struct gl_renderer *renderer);
+ 
++/** Whether this thread owns Flutter's rendering context (not the upload context). */
++bool gl_renderer_is_flutter_rendering_context_current(struct gl_renderer *renderer);
++
+ int gl_renderer_clear_current(struct gl_renderer *renderer);
+ 
+ EGLContext gl_renderer_create_context(struct gl_renderer *renderer);
+diff --git a/src/gl_renderer.c b/src/gl_renderer.c
+--- a/src/gl_renderer.c
++++ b/src/gl_renderer.c
+@@ -533,6 +533,12 @@
+     return 0;
+ }
+ 
++bool gl_renderer_is_flutter_rendering_context_current(struct gl_renderer *renderer) {
++    return eglGetCurrentDisplay() == renderer->egl_display &&
++           renderer->flutter_rendering_context != EGL_NO_CONTEXT &&
++           eglGetCurrentContext() == renderer->flutter_rendering_context;
++}
++
+ int gl_renderer_clear_current(struct gl_renderer *renderer) {
+     EGLBoolean egl_ok;
+ 
+diff --git a/src/egl_gbm_render_surface.c b/src/egl_gbm_render_surface.c
+--- a/src/egl_gbm_render_surface.c
++++ b/src/egl_gbm_render_surface.c
+@@ -53,6 +53,10 @@
+     EGLSurface egl_surface;
+     EGLConfig egl_config;
+     struct gl_renderer *renderer;
++
++    // Opt-in diagnostic only; does not replace normal fence/lifetime handling.
++    bool diagnostic_finish;
++    int diagnostic_finish_status;
+ 
+     // Internally mesa supports 4 GBM BOs per surface, so we don't need
+     // more than 4 here either.
+@@ -240,6 +244,9 @@
+     s->egl_surface = egl_surface;
+     s->egl_config = egl_config;
+     s->renderer = gl_renderer_ref(renderer);
++    const char *finish = getenv("FLUTTER_PI_DEBUG_GL_FINISH");
++    s->diagnostic_finish = finish != NULL && finish[0] == '1' && finish[1] == '\0';
++    s->diagnostic_finish_status = 0;
+     for (int i = 0; i < ARRAY_SIZE(s->locked_fbs); i++) {
+         s->locked_fbs[i].is_locked = (atomic_flag) ATOMIC_FLAG_INIT;
+     }
+@@ -637,6 +644,27 @@
+     if (egl_ok != EGL_TRUE) {
+         LOG_EGL_ERROR(eglGetError(), "Couldn't flush rendering. eglSwapBuffers");
+         return EIO;
++    }
++
++    if (egl_surface->diagnostic_finish) {
++        // Stay on the existing rendering context. Making an unrelated context
++        // current here would not wait for Flutter's submitted rendering work.
++        if (gl_renderer_is_flutter_rendering_context_current(egl_surface->renderer) &&
++            eglGetCurrentSurface(EGL_DRAW) == egl_surface->egl_surface) {
++            TRACER_BEGIN(s->surface.tracer, "diagnostic_glFinish");
++            glFinish();
++            TRACER_END(s->surface.tracer, "diagnostic_glFinish");
++            if (egl_surface->diagnostic_finish_status != 1) {
++                LOG_ERROR_UNPREFIXED("[diagnostic] GL finish ACTIVE: after EGL swap, before GBM/KMS handoff.\n");
++            }
++            egl_surface->diagnostic_finish_status = 1;
++        } else {
++            if (egl_surface->diagnostic_finish_status != -1) {
++                LOG_ERROR("[diagnostic] GL finish SKIPPED: Flutter render context/draw surface is not current; "
++                          "this is NOT a valid finish-enabled comparison.\n");
++            }
++            egl_surface->diagnostic_finish_status = -1;
++        }
+     }
+ 
+     TRACER_BEGIN(s->surface.tracer, "gbm_surface_lock_front_buffer");
